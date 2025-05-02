@@ -1,0 +1,459 @@
+commit bdddead18a1e6e066841dfb89089d1d9e40ae614
+Author: Sudheer Vinukonda <svinukonda@linkedin.com>
+Date:   Thu May 1 15:26:59 2025 -0700
+
+    add priority queue to reconciling work in apply_controller
+    
+    apply_controllers in the memberagent currently watches all the
+    Work resources created in the designated namespace on the Hub
+    cluster and reconciles them in order. This can result in serious
+    bottleneck in applying newer resources or newer updates to
+    existing resources over time especially when there are 1000s
+    of namespaces created a long time ago and never have any
+    updates to them, yet reconciled one by one before the
+    controller can get to the newer ones.
+    
+    This PR integrates a priority queue for adding work objects to
+    the watch list to prioritize work objects that are newer, have
+    recent updates or have their conditions not Ready yet.
+    
+    Signed-off-by: Sudheer Vinukonda <sudheerv@apache.org>
+
+diff --git a/apis/cluster/v1beta1/zz_generated.deepcopy.go b/apis/cluster/v1beta1/zz_generated.deepcopy.go
+index 7bb7f50..17e71a1 100644
+--- a/apis/cluster/v1beta1/zz_generated.deepcopy.go
++++ b/apis/cluster/v1beta1/zz_generated.deepcopy.go
+@@ -21,7 +21,7 @@ limitations under the License.
+ package v1beta1
+ 
+ import (
+-	"k8s.io/api/core/v1"
++	v1 "k8s.io/api/core/v1"
+ 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+ 	runtime "k8s.io/apimachinery/pkg/runtime"
+ )
+diff --git a/apis/placement/v1alpha1/zz_generated.deepcopy.go b/apis/placement/v1alpha1/zz_generated.deepcopy.go
+index 8d79518..ccbe37c 100644
+--- a/apis/placement/v1alpha1/zz_generated.deepcopy.go
++++ b/apis/placement/v1alpha1/zz_generated.deepcopy.go
+@@ -22,7 +22,7 @@ package v1alpha1
+ 
+ import (
+ 	"github.com/kubefleet-dev/kubefleet/apis/placement/v1beta1"
+-	"k8s.io/apimachinery/pkg/apis/meta/v1"
++	v1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+ 	runtime "k8s.io/apimachinery/pkg/runtime"
+ 	"k8s.io/apimachinery/pkg/util/intstr"
+ )
+diff --git a/apis/placement/v1beta1/zz_generated.deepcopy.go b/apis/placement/v1beta1/zz_generated.deepcopy.go
+index 8e692e1..9353405 100644
+--- a/apis/placement/v1beta1/zz_generated.deepcopy.go
++++ b/apis/placement/v1beta1/zz_generated.deepcopy.go
+@@ -21,7 +21,7 @@ limitations under the License.
+ package v1beta1
+ 
+ import (
+-	"k8s.io/apimachinery/pkg/apis/meta/v1"
++	v1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+ 	"k8s.io/apimachinery/pkg/runtime"
+ 	"k8s.io/apimachinery/pkg/util/intstr"
+ )
+diff --git a/apis/v1alpha1/zz_generated.deepcopy.go b/apis/v1alpha1/zz_generated.deepcopy.go
+index 27a862c..85550ca 100644
+--- a/apis/v1alpha1/zz_generated.deepcopy.go
++++ b/apis/v1alpha1/zz_generated.deepcopy.go
+@@ -22,7 +22,7 @@ package v1alpha1
+ 
+ import (
+ 	corev1 "k8s.io/api/core/v1"
+-	"k8s.io/apimachinery/pkg/apis/meta/v1"
++	v1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+ 	runtime "k8s.io/apimachinery/pkg/runtime"
+ )
+ 
+diff --git a/go.mod b/go.mod
+index 112daf2..c25c25d 100644
+--- a/go.mod
++++ b/go.mod
+@@ -7,11 +7,11 @@ require (
+ 	github.com/Azure/azure-sdk-for-go/sdk/azidentity v1.8.0
+ 	github.com/Azure/karpenter v0.2.0
+ 	github.com/crossplane/crossplane-runtime v1.17.0
+-	github.com/evanphx/json-patch/v5 v5.9.0
++	github.com/evanphx/json-patch/v5 v5.9.11
+ 	github.com/go-logr/logr v1.4.2
+ 	github.com/google/go-cmp v0.6.0
+-	github.com/onsi/ginkgo/v2 v2.21.0
+-	github.com/onsi/gomega v1.35.1
++	github.com/onsi/ginkgo/v2 v2.22.0
++	github.com/onsi/gomega v1.36.1
+ 	github.com/prometheus/client_golang v1.19.1
+ 	github.com/prometheus/client_model v0.6.1
+ 	github.com/qri-io/jsonpointer v0.1.1
+@@ -25,19 +25,19 @@ require (
+ 	golang.org/x/exp v0.0.0-20241004190924-225e2abe05e6
+ 	golang.org/x/sync v0.12.0
+ 	golang.org/x/time v0.7.0
+-	k8s.io/api v0.31.1
+-	k8s.io/apiextensions-apiserver v0.31.1
+-	k8s.io/apimachinery v0.31.1
+-	k8s.io/client-go v0.31.1
+-	k8s.io/component-base v0.31.1
++	k8s.io/api v0.32.1
++	k8s.io/apiextensions-apiserver v0.32.1
++	k8s.io/apimachinery v0.32.1
++	k8s.io/client-go v0.32.1
++	k8s.io/component-base v0.32.1
+ 	k8s.io/component-helpers v0.28.3
+ 	k8s.io/klog/v2 v2.130.1
+ 	k8s.io/metrics v0.25.2
+-	k8s.io/utils v0.0.0-20240711033017-18e509b52bc8
++	k8s.io/utils v0.0.0-20241104100929-3ea5e8cea738
+ 	sigs.k8s.io/cloud-provider-azure v1.28.2
+ 	sigs.k8s.io/cloud-provider-azure/pkg/azclient v0.0.50
+ 	sigs.k8s.io/cluster-inventory-api v0.0.0-20240730014211-ef0154379848
+-	sigs.k8s.io/controller-runtime v0.19.0
++	sigs.k8s.io/controller-runtime v0.20.4
+ 	sigs.k8s.io/work-api v0.0.0-20220407021756-586d707fdb2c
+ )
+ 
+@@ -82,13 +82,12 @@ require (
+ 	github.com/gogo/protobuf v1.3.2 // indirect
+ 	github.com/golang-jwt/jwt/v4 v4.5.2 // indirect
+ 	github.com/golang-jwt/jwt/v5 v5.2.2 // indirect
+-	github.com/golang/groupcache v0.0.0-20210331224755-41bb18bfe9da // indirect
+ 	github.com/golang/protobuf v1.5.4 // indirect
++	github.com/google/btree v1.1.3 // indirect
+ 	github.com/google/gnostic-models v0.6.8 // indirect
+ 	github.com/google/gofuzz v1.2.0 // indirect
+ 	github.com/google/pprof v0.0.0-20241029153458-d1b30febd7db // indirect
+ 	github.com/google/uuid v1.6.0 // indirect
+-	github.com/imdario/mergo v0.3.16 // indirect
+ 	github.com/inconshreveable/mousetrap v1.1.0 // indirect
+ 	github.com/josharian/intern v1.0.0 // indirect
+ 	github.com/json-iterator/go v1.1.12 // indirect
+@@ -124,12 +123,11 @@ require (
+ 	google.golang.org/protobuf v1.35.1 // indirect
+ 	gopkg.in/evanphx/json-patch.v4 v4.12.0 // indirect
+ 	gopkg.in/inf.v0 v0.9.1 // indirect
+-	gopkg.in/yaml.v2 v2.4.0 // indirect
+ 	gopkg.in/yaml.v3 v3.0.1 // indirect
+-	k8s.io/kube-openapi v0.0.0-20240903163716-9e1beecbcb38 // indirect
++	k8s.io/kube-openapi v0.0.0-20241105132330-32ad38e42d3f // indirect
+ 	knative.dev/pkg v0.0.0-20231010144348-ca8c009405dd // indirect
+-	sigs.k8s.io/json v0.0.0-20221116044647-bc3834ca7abd // indirect
+-	sigs.k8s.io/structured-merge-diff/v4 v4.4.1 // indirect
++	sigs.k8s.io/json v0.0.0-20241010143419-9aa6b5e7a4b3 // indirect
++	sigs.k8s.io/structured-merge-diff/v4 v4.4.2 // indirect
+ 	sigs.k8s.io/yaml v1.4.0 // indirect
+ )
+ 
+diff --git a/go.sum b/go.sum
+index 992e2f8..653eb37 100644
+--- a/go.sum
++++ b/go.sum
+@@ -105,8 +105,8 @@ github.com/emicklei/go-restful/v3 v3.12.1 h1:PJMDIM/ak7btuL8Ex0iYET9hxM3CI2sjZtz
+ github.com/emicklei/go-restful/v3 v3.12.1/go.mod h1:6n3XBCmQQb25CM2LCACGz8ukIrRry+4bhvbpWn3mrbc=
+ github.com/evanphx/json-patch v5.9.0+incompatible h1:fBXyNpNMuTTDdquAq/uisOr2lShz4oaXpDTX2bLe7ls=
+ github.com/evanphx/json-patch v5.9.0+incompatible/go.mod h1:50XU6AFN0ol/bzJsmQLiYLvXMP4fmwYFNcr97nuDLSk=
+-github.com/evanphx/json-patch/v5 v5.9.0 h1:kcBlZQbplgElYIlo/n1hJbls2z/1awpXxpRi0/FOJfg=
+-github.com/evanphx/json-patch/v5 v5.9.0/go.mod h1:VNkHZ/282BpEyt/tObQO8s5CMPmYYq14uClGH4abBuQ=
++github.com/evanphx/json-patch/v5 v5.9.11 h1:/8HVnzMq13/3x9TPvjG08wUGqBTmZBsCWzjTM0wiaDU=
++github.com/evanphx/json-patch/v5 v5.9.11/go.mod h1:3j+LviiESTElxA4p3EMKAB9HXj3/XEtnUf6OZxqIQTM=
+ github.com/felixge/httpsnoop v1.0.4 h1:NFTV2Zj1bL4mc9sqWACXbQFVBBg2W3GPvqp8/ESS2Wg=
+ github.com/felixge/httpsnoop v1.0.4/go.mod h1:m8KPJKqk1gH5J9DgRY2ASl2lWCfGKXixSwevea8zH2U=
+ github.com/fsnotify/fsnotify v1.7.0 h1:8JEhPFa5W2WU7YfeZzPNqzMP6Lwt7L2715Ggo0nosvA=
+@@ -141,12 +141,12 @@ github.com/golang-jwt/jwt/v4 v4.5.2 h1:YtQM7lnr8iZ+j5q71MGKkNw9Mn7AjHM68uc9g5fXe
+ github.com/golang-jwt/jwt/v4 v4.5.2/go.mod h1:m21LjoU+eqJr34lmDMbreY2eSTRJ1cv77w39/MY0Ch0=
+ github.com/golang-jwt/jwt/v5 v5.2.2 h1:Rl4B7itRWVtYIHFrSNd7vhTiz9UpLdi6gZhZ3wEeDy8=
+ github.com/golang-jwt/jwt/v5 v5.2.2/go.mod h1:pqrtFR0X4osieyHYxtmOUWsAWrfe1Q5UVIyoH402zdk=
+-github.com/golang/groupcache v0.0.0-20210331224755-41bb18bfe9da h1:oI5xCqsCo564l8iNU+DwB5epxmsaqB+rhGL0m5jtYqE=
+-github.com/golang/groupcache v0.0.0-20210331224755-41bb18bfe9da/go.mod h1:cIg4eruTrX1D+g88fzRXU5OdNfaM+9IcxsU14FzY7Hc=
+ github.com/golang/mock v1.6.0 h1:ErTB+efbowRARo13NNdxyJji2egdxLGQhRaY+DUumQc=
+ github.com/golang/mock v1.6.0/go.mod h1:p6yTPP+5HYm5mzsMV8JkE6ZKdX+/wYM6Hr+LicevLPs=
+ github.com/golang/protobuf v1.5.4 h1:i7eJL8qZTpSEXOPTxNKhASYpMn+8e5Q6AdndVa1dWek=
+ github.com/golang/protobuf v1.5.4/go.mod h1:lnTiLA8Wa4RWRcIUkrtSVa5nRhsEGBg48fD6rSs7xps=
++github.com/google/btree v1.1.3 h1:CVpQJjYgC4VbzxeGVHfvZrv1ctoYCAI8vbl07Fcxlyg=
++github.com/google/btree v1.1.3/go.mod h1:qOPhT0dTNdNzV6Z/lhRX0YXUafgPLFUh+gZMl761Gm4=
+ github.com/google/gnostic-models v0.6.8 h1:yo/ABAfM5IMRsS1VnXjTBvUb61tFIHozhlYvRgGre9I=
+ github.com/google/gnostic-models v0.6.8/go.mod h1:5n7qKqH0f5wFt+aWF8CW6pZLLNOfYuF5OpfBSENuI8U=
+ github.com/google/go-cmp v0.5.9/go.mod h1:17dUlkBOakJ0+DkrSSNjCkIjxS6bF9zb3elmeNGIjoY=
+@@ -159,8 +159,6 @@ github.com/google/pprof v0.0.0-20241029153458-d1b30febd7db h1:097atOisP2aRj7vFgY
+ github.com/google/pprof v0.0.0-20241029153458-d1b30febd7db/go.mod h1:vavhavw2zAxS5dIdcRluK6cSGGPlZynqzFM8NdvU144=
+ github.com/google/uuid v1.6.0 h1:NIvaJDMOsjHA8n1jAhLSgzrAzy1Hgr+hNrb57e+94F0=
+ github.com/google/uuid v1.6.0/go.mod h1:TIyPZe4MgqvfeYDBFedMoGGpEw/LqOeaOT+nhxU+yHo=
+-github.com/imdario/mergo v0.3.16 h1:wwQJbIsHYGMUyLSPrEq1CT16AhnhNJQ51+4fdHUnCl4=
+-github.com/imdario/mergo v0.3.16/go.mod h1:WBLT9ZmE3lPoWsEzCh9LPo3TiwVN+ZKEjmz+hD27ysY=
+ github.com/inconshreveable/mousetrap v1.1.0 h1:wN+x4NVGpMsO7ErUn/mUI3vEoE6Jt13X2s0bqwp9tc8=
+ github.com/inconshreveable/mousetrap v1.1.0/go.mod h1:vpF70FUmC8bwa3OWnCshd2FqLfsEA9PFc4w1p2J65bw=
+ github.com/josharian/intern v1.0.0 h1:vlS4z54oSdjm0bgjRigI+G1HpF+tI+9rE5LLzOg8HmY=
+@@ -190,10 +188,10 @@ github.com/modern-go/reflect2 v1.0.2 h1:xBagoLtFs94CBntxluKeaWgTMpvLxC4ur3nMaC9G
+ github.com/modern-go/reflect2 v1.0.2/go.mod h1:yWuevngMOJpCy52FWWMvUC8ws7m/LJsjYzDa0/r8luk=
+ github.com/munnerz/goautoneg v0.0.0-20191010083416-a7dc8b61c822 h1:C3w9PqII01/Oq1c1nUAm88MOHcQC9l5mIlSMApZMrHA=
+ github.com/munnerz/goautoneg v0.0.0-20191010083416-a7dc8b61c822/go.mod h1:+n7T8mK8HuQTcFwEeznm/DIxMOiR9yIdICNftLE1DvQ=
+-github.com/onsi/ginkgo/v2 v2.21.0 h1:7rg/4f3rB88pb5obDgNZrNHrQ4e6WpjonchcpuBRnZM=
+-github.com/onsi/ginkgo/v2 v2.21.0/go.mod h1:7Du3c42kxCUegi0IImZ1wUQzMBVecgIHjR1C+NkhLQo=
+-github.com/onsi/gomega v1.35.1 h1:Cwbd75ZBPxFSuZ6T+rN/WCb/gOc6YgFBXLlZLhC7Ds4=
+-github.com/onsi/gomega v1.35.1/go.mod h1:PvZbdDc8J6XJEpDK4HCuRBm8a6Fzp9/DmhC9C7yFlog=
++github.com/onsi/ginkgo/v2 v2.22.0 h1:Yed107/8DjTr0lKCNt7Dn8yQ6ybuDRQoMGrNFKzMfHg=
++github.com/onsi/ginkgo/v2 v2.22.0/go.mod h1:7Du3c42kxCUegi0IImZ1wUQzMBVecgIHjR1C+NkhLQo=
++github.com/onsi/gomega v1.36.1 h1:bJDPBO7ibjxcbHMgSCoo4Yj18UWbKDlLwX1x9sybDcw=
++github.com/onsi/gomega v1.36.1/go.mod h1:PvZbdDc8J6XJEpDK4HCuRBm8a6Fzp9/DmhC9C7yFlog=
+ github.com/patrickmn/go-cache v2.1.0+incompatible h1:HRMgzkcYKYpi3C8ajMPV8OFXaaRUnok+kx1WdO15EQc=
+ github.com/patrickmn/go-cache v2.1.0+incompatible/go.mod h1:3Qf8kWWT7OJRJbdiICTKqZju1ZixQ/KpMGzzAfe6+WQ=
+ github.com/pkg/browser v0.0.0-20240102092130-5ac0b6a4141c h1:+mdjkGKdHQG3305AYmdv1U2eRNDiU2ErMBj1gwrq8eQ=
+@@ -359,36 +357,33 @@ gopkg.in/evanphx/json-patch.v4 v4.12.0 h1:n6jtcsulIzXPJaxegRbvFNNrZDjbij7ny3gmSP
+ gopkg.in/evanphx/json-patch.v4 v4.12.0/go.mod h1:p8EYWUEYMpynmqDbY58zCKCFZw8pRWMG4EsWvDvM72M=
+ gopkg.in/inf.v0 v0.9.1 h1:73M5CoZyi3ZLMOyDlQh031Cx6N9NDJ2Vvfl76EDAgDc=
+ gopkg.in/inf.v0 v0.9.1/go.mod h1:cWUDdTG/fYaXco+Dcufb5Vnc6Gp2YChqWtbxRZE0mXw=
+-gopkg.in/yaml.v2 v2.2.8/go.mod h1:hI93XBmqTisBFMUTm0b8Fm+jr3Dg1NNxqwp+5A1VGuI=
+-gopkg.in/yaml.v2 v2.4.0 h1:D8xgwECY7CYvx+Y2n4sBz93Jn9JRvxdiyyo8CTfuKaY=
+-gopkg.in/yaml.v2 v2.4.0/go.mod h1:RDklbk79AGWmwhnvt/jBztapEOGDOx6ZbXqjP6csGnQ=
+ gopkg.in/yaml.v3 v3.0.0-20200313102051-9f266ea9e77c/go.mod h1:K4uyk7z7BCEPqu6E+C64Yfv1cQ7kz7rIZviUmN+EgEM=
+ gopkg.in/yaml.v3 v3.0.1 h1:fxVm/GzAzEWqLHuvctI91KS9hhNmmWOoWu0XTYJS7CA=
+ gopkg.in/yaml.v3 v3.0.1/go.mod h1:K4uyk7z7BCEPqu6E+C64Yfv1cQ7kz7rIZviUmN+EgEM=
+-k8s.io/api v0.31.1 h1:Xe1hX/fPW3PXYYv8BlozYqw63ytA92snr96zMW9gWTU=
+-k8s.io/api v0.31.1/go.mod h1:sbN1g6eY6XVLeqNsZGLnI5FwVseTrZX7Fv3O26rhAaI=
+-k8s.io/apiextensions-apiserver v0.31.1 h1:L+hwULvXx+nvTYX/MKM3kKMZyei+UiSXQWciX/N6E40=
+-k8s.io/apiextensions-apiserver v0.31.1/go.mod h1:tWMPR3sgW+jsl2xm9v7lAyRF1rYEK71i9G5dRtkknoQ=
+-k8s.io/apimachinery v0.31.1 h1:mhcUBbj7KUjaVhyXILglcVjuS4nYXiwC+KKFBgIVy7U=
+-k8s.io/apimachinery v0.31.1/go.mod h1:rsPdaZJfTfLsNJSQzNHQvYoTmxhoOEofxtOsF3rtsMo=
+-k8s.io/client-go v0.31.1 h1:f0ugtWSbWpxHR7sjVpQwuvw9a3ZKLXX0u0itkFXufb0=
+-k8s.io/client-go v0.31.1/go.mod h1:sKI8871MJN2OyeqRlmA4W4KM9KBdBUpDLu/43eGemCg=
++k8s.io/api v0.32.1 h1:f562zw9cy+GvXzXf0CKlVQ7yHJVYzLfL6JAS4kOAaOc=
++k8s.io/api v0.32.1/go.mod h1:/Yi/BqkuueW1BgpoePYBRdDYfjPF5sgTr5+YqDZra5k=
++k8s.io/apiextensions-apiserver v0.32.1 h1:hjkALhRUeCariC8DiVmb5jj0VjIc1N0DREP32+6UXZw=
++k8s.io/apiextensions-apiserver v0.32.1/go.mod h1:sxWIGuGiYov7Io1fAS2X06NjMIk5CbRHc2StSmbaQto=
++k8s.io/apimachinery v0.32.1 h1:683ENpaCBjma4CYqsmZyhEzrGz6cjn1MY/X2jB2hkZs=
++k8s.io/apimachinery v0.32.1/go.mod h1:GpHVgxoKlTxClKcteaeuF1Ul/lDVb74KpZcxcmLDElE=
++k8s.io/client-go v0.32.1 h1:otM0AxdhdBIaQh7l1Q0jQpmo7WOFIk5FFa4bg6YMdUU=
++k8s.io/client-go v0.32.1/go.mod h1:aTTKZY7MdxUaJ/KiUs8D+GssR9zJZi77ZqtzcGXIiDg=
+ k8s.io/cloud-provider v0.28.3 h1:9u+JjA3zIn0nqLOOa8tWnprFkffguSAhfBvo8p7LhBQ=
+ k8s.io/cloud-provider v0.28.3/go.mod h1:shAJxdrKu+SwwGUhkodxByPjaH8KBFZqXo6jU1F0ehI=
+-k8s.io/component-base v0.31.1 h1:UpOepcrX3rQ3ab5NB6g5iP0tvsgJWzxTyAo20sgYSy8=
+-k8s.io/component-base v0.31.1/go.mod h1:WGeaw7t/kTsqpVTaCoVEtillbqAhF2/JgvO0LDOMa0w=
++k8s.io/component-base v0.32.1 h1:/5IfJ0dHIKBWysGV0yKTFfacZ5yNV1sulPh3ilJjRZk=
++k8s.io/component-base v0.32.1/go.mod h1:j1iMMHi/sqAHeG5z+O9BFNCF698a1u0186zkjMZQ28w=
+ k8s.io/component-helpers v0.28.3 h1:te9ieTGzcztVktUs92X53P6BamAoP73MK0qQP0WmDqc=
+ k8s.io/component-helpers v0.28.3/go.mod h1:oJR7I9ist5UAQ3y/CTdbw6CXxdMZ1Lw2Ua/EZEwnVLs=
+ k8s.io/csi-translation-lib v0.28.3 h1:7deV+HZjV418AGikSDPW8dyzTpm4K3tNbQUp3KmR7cs=
+ k8s.io/csi-translation-lib v0.28.3/go.mod h1:zlrYwakCz2yji9/8EaJk+afIKPrYXPNXXLDO8DVuuTk=
+ k8s.io/klog/v2 v2.130.1 h1:n9Xl7H1Xvksem4KFG4PYbdQCQxqc/tTUyrgXaOhHSzk=
+ k8s.io/klog/v2 v2.130.1/go.mod h1:3Jpz1GvMt720eyJH1ckRHK1EDfpxISzJ7I9OYgaDtPE=
+-k8s.io/kube-openapi v0.0.0-20240903163716-9e1beecbcb38 h1:1dWzkmJrrprYvjGwh9kEUxmcUV/CtNU8QM7h1FLWQOo=
+-k8s.io/kube-openapi v0.0.0-20240903163716-9e1beecbcb38/go.mod h1:coRQXBK9NxO98XUv3ZD6AK3xzHCxV6+b7lrquKwaKzA=
++k8s.io/kube-openapi v0.0.0-20241105132330-32ad38e42d3f h1:GA7//TjRY9yWGy1poLzYYJJ4JRdzg3+O6e8I+e+8T5Y=
++k8s.io/kube-openapi v0.0.0-20241105132330-32ad38e42d3f/go.mod h1:R/HEjbvWI0qdfb8viZUeVZm0X6IZnxAydC7YU42CMw4=
+ k8s.io/metrics v0.25.2 h1:105TuPaIFfr4EHzN56WwZJO7r1UesuDytNTzeMqGySo=
+ k8s.io/metrics v0.25.2/go.mod h1:4NDAauOuEJ+NWO2+hWkhFE4rWBx/plLWJOYU3vGl0sA=
+-k8s.io/utils v0.0.0-20240711033017-18e509b52bc8 h1:pUdcCO1Lk/tbT5ztQWOBi5HBgbBP1J8+AsQnQCKsi8A=
+-k8s.io/utils v0.0.0-20240711033017-18e509b52bc8/go.mod h1:OLgZIPagt7ERELqWJFomSt595RzquPNLL48iOWgYOg0=
++k8s.io/utils v0.0.0-20241104100929-3ea5e8cea738 h1:M3sRQVHv7vB20Xc2ybTt7ODCeFj6JSWYFzOFnYeS6Ro=
++k8s.io/utils v0.0.0-20241104100929-3ea5e8cea738/go.mod h1:OLgZIPagt7ERELqWJFomSt595RzquPNLL48iOWgYOg0=
+ knative.dev/pkg v0.0.0-20231010144348-ca8c009405dd h1:KJXBX9dOmRTUWduHg1gnWtPGIEl+GMh8UHdrBEZgOXE=
+ knative.dev/pkg v0.0.0-20231010144348-ca8c009405dd/go.mod h1:36cYnaOVHkzmhgybmYX6zDaTl3PakFeJQJl7wi6/RLE=
+ sigs.k8s.io/cloud-provider-azure v1.28.2 h1:KKrWdC1+p2xXdT1VRmSkT57MhKNzPXk3yPcrwUDIr5I=
+@@ -397,11 +392,11 @@ sigs.k8s.io/cloud-provider-azure/pkg/azclient v0.0.50 h1:l9igMANNptVwYmZrqGS51oW
+ sigs.k8s.io/cloud-provider-azure/pkg/azclient v0.0.50/go.mod h1:1M90A+akyTabHVnveSKlvIO/Kk9kEr1LjRx+08twKVU=
+ sigs.k8s.io/cluster-inventory-api v0.0.0-20240730014211-ef0154379848 h1:WYPi2PdQyZwZkHG648v2jQl6deyCgyjJ0fkLYgUJ618=
+ sigs.k8s.io/cluster-inventory-api v0.0.0-20240730014211-ef0154379848/go.mod h1:/aN4e7RWOMHgT4xAjCNkV4YFcpKfpZCeumMIL7S+KNM=
+-sigs.k8s.io/controller-runtime v0.19.0 h1:nWVM7aq+Il2ABxwiCizrVDSlmDcshi9llbaFbC0ji/Q=
+-sigs.k8s.io/controller-runtime v0.19.0/go.mod h1:iRmWllt8IlaLjvTTDLhRBXIEtkCK6hwVBJJsYS9Ajf4=
+-sigs.k8s.io/json v0.0.0-20221116044647-bc3834ca7abd h1:EDPBXCAspyGV4jQlpZSudPeMmr1bNJefnuqLsRAsHZo=
+-sigs.k8s.io/json v0.0.0-20221116044647-bc3834ca7abd/go.mod h1:B8JuhiUyNFVKdsE8h686QcCxMaH6HrOAZj4vswFpcB0=
+-sigs.k8s.io/structured-merge-diff/v4 v4.4.1 h1:150L+0vs/8DA78h1u02ooW1/fFq/Lwr+sGiqlzvrtq4=
+-sigs.k8s.io/structured-merge-diff/v4 v4.4.1/go.mod h1:N8hJocpFajUSSeSJ9bOZ77VzejKZaXsTtZo4/u7Io08=
++sigs.k8s.io/controller-runtime v0.20.4 h1:X3c+Odnxz+iPTRobG4tp092+CvBU9UK0t/bRf+n0DGU=
++sigs.k8s.io/controller-runtime v0.20.4/go.mod h1:xg2XB0K5ShQzAgsoujxuKN4LNXR2LfwwHsPj7Iaw+XY=
++sigs.k8s.io/json v0.0.0-20241010143419-9aa6b5e7a4b3 h1:/Rv+M11QRah1itp8VhT6HoVx1Ray9eB4DBr+K+/sCJ8=
++sigs.k8s.io/json v0.0.0-20241010143419-9aa6b5e7a4b3/go.mod h1:18nIHnGi6636UCz6m8i4DhaJ65T6EruyzmoQqI2BVDo=
++sigs.k8s.io/structured-merge-diff/v4 v4.4.2 h1:MdmvkGuXi/8io6ixD5wud3vOLwc1rj0aNqRlpuvjmwA=
++sigs.k8s.io/structured-merge-diff/v4 v4.4.2/go.mod h1:N8f93tFZh9U6vpxwRArLiikrE5/2tiu1w1AGfACIGE4=
+ sigs.k8s.io/yaml v1.4.0 h1:Mk1wCc2gy/F0THH0TAp1QYyJNzRm2KCLy3o5ASXVI5E=
+ sigs.k8s.io/yaml v1.4.0/go.mod h1:Ejl7/uTz7PSA4eKMyQCUTnhZYNmLIl+5c2lQPGR2BPY=
+diff --git a/pkg/controllers/work/apply_controller.go b/pkg/controllers/work/apply_controller.go
+index d76c9ae..ee7ac4f 100644
+--- a/pkg/controllers/work/apply_controller.go
++++ b/pkg/controllers/work/apply_controller.go
+@@ -52,14 +52,16 @@ import (
+ 	utilerrors "k8s.io/apimachinery/pkg/util/errors"
+ 	"k8s.io/client-go/dynamic"
+ 	"k8s.io/client-go/tools/record"
++	"k8s.io/client-go/util/workqueue"
+ 	"k8s.io/klog/v2"
+ 	"k8s.io/utils/ptr"
+ 	ctrl "sigs.k8s.io/controller-runtime"
+-	"sigs.k8s.io/controller-runtime/pkg/builder"
+ 	"sigs.k8s.io/controller-runtime/pkg/client"
+ 	ctrloption "sigs.k8s.io/controller-runtime/pkg/controller"
+ 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
+-	"sigs.k8s.io/controller-runtime/pkg/predicate"
++	"sigs.k8s.io/controller-runtime/pkg/controller/priorityqueue"
++	"sigs.k8s.io/controller-runtime/pkg/event"
++	"sigs.k8s.io/controller-runtime/pkg/reconcile"
+ 
+ 	fleetv1beta1 "github.com/kubefleet-dev/kubefleet/apis/placement/v1beta1"
+ 	"github.com/kubefleet-dev/kubefleet/pkg/metrics"
+@@ -74,6 +76,10 @@ const (
+ 	workFieldManagerName = "work-api-agent"
+ )
+ 
++const (
++	workAgeToReconcile = 1 * time.Hour
++)
++
+ // WorkCondition condition reasons
+ const (
+ 	workAppliedFailedReason       = "WorkAppliedFailed"
+@@ -101,6 +107,102 @@ const (
+ 	manifestNeedsUpdateMessage = "Manifest has just been updated and in the processing of checking its availability"
+ )
+ 
++// Custom type to hold a reconcile.Request and a priority value
++type priorityQueueItem struct {
++	reconcile.Request
++	Priority int
++}
++
++// PriorityQueueEventHandler is a custom event handler for adding objects to the priority queue.
++type PriorityQueueEventHandler struct {
++	Queue  priorityqueue.PriorityQueue[priorityQueueItem] // The priority queue to manage events
++	Client client.Client                                  // store the client to make API calls
++}
++
++// Implement priorityqueue.Item interface for priorityQueueItem
++func (i priorityQueueItem) GetPriority() int {
++	return i.Priority
++}
++
++func (h *PriorityQueueEventHandler) WorkPendingApply(ctx context.Context, obj client.Object) bool {
++	var work fleetv1beta1.Work
++	ns := obj.GetNamespace()
++	name := obj.GetName()
++	err := h.Client.Get(ctx, client.ObjectKey{
++		Namespace: ns,
++		Name:      name,
++	}, &work)
++	if err != nil {
++		// Log and return
++		klog.ErrorS(err, "Failed to get the work", "name", name, "ns", ns)
++		return false
++	}
++	availCond := meta.FindStatusCondition(work.Status.Conditions, fleetv1beta1.WorkConditionTypeAvailable)
++	appliedCond := meta.FindStatusCondition(work.Status.Conditions, fleetv1beta1.WorkConditionTypeApplied)
++
++	// check if the object has been recently modified
++	availCondLastUpdatedTime := availCond.LastTransitionTime.Time
++	appliedCondLastUpdatedTime := appliedCond.LastTransitionTime.Time
++	if time.Since(availCondLastUpdatedTime) < 1*time.Hour || time.Since(appliedCondLastUpdatedTime) < 1*time.Hour {
++		return true
++	}
++
++	if condition.IsConditionStatusTrue(availCond, work.GetGeneration()) &&
++		condition.IsConditionStatusTrue(appliedCond, work.GetGeneration()) {
++		return false
++	}
++
++	// Work not yet applied
++	return true
++}
++
++func (h *PriorityQueueEventHandler) AddToPriorityQueue(ctx context.Context, obj client.Object, alwaysAdd bool) {
++	req := reconcile.Request{
++		NamespacedName: types.NamespacedName{
++			Namespace: obj.GetNamespace(),
++			Name:      obj.GetName(),
++		},
++	}
++
++	objAge := time.Since(obj.GetCreationTimestamp().Time)
++
++	var objPriority int
++	if alwaysAdd || objAge < workAgeToReconcile || h.WorkPendingApply(ctx, obj) {
++		// Newer or pending objects get higher priority
++		// Negate the Unix timestamp to give higher priority to newer timestamps
++		objPriority = -int(time.Now().Unix())
++	} else {
++		// skip adding older objects with no changes
++		klog.V(2).InfoS("adding old item to proirityQueueItem", "obj", req.Name, "age", objAge)
++		objPriority = int(obj.GetCreationTimestamp().Unix())
++	}
++
++	// Create the custom priorityQueueItem with the request and priority
++	item := priorityQueueItem{
++		Request:  req,
++		Priority: objPriority,
++	}
++
++	h.Queue.Add(item)
++	klog.V(2).InfoS("Created ProirityQueueItem", "priority", objPriority, "obj", req.Name, "queue size", h.Queue.Len())
++}
++
++func (h *PriorityQueueEventHandler) Create(ctx context.Context, evt event.TypedCreateEvent[client.Object], queue workqueue.TypedRateLimitingInterface[reconcile.Request]) {
++	h.AddToPriorityQueue(ctx, evt.Object, false)
++}
++
++func (h *PriorityQueueEventHandler) Delete(ctx context.Context, evt event.TypedDeleteEvent[client.Object], queue workqueue.TypedRateLimitingInterface[reconcile.Request]) {
++	h.AddToPriorityQueue(ctx, evt.Object, true)
++}
++
++func (h *PriorityQueueEventHandler) Update(ctx context.Context, evt event.TypedUpdateEvent[client.Object], queue workqueue.TypedRateLimitingInterface[reconcile.Request]) {
++	h.AddToPriorityQueue(ctx, evt.ObjectNew, true) // we don't care about evt.ObjectOld
++}
++
++func (h *PriorityQueueEventHandler) Generic(ctx context.Context, evt event.TypedGenericEvent[client.Object], queue workqueue.TypedRateLimitingInterface[reconcile.Request]) {
++	h.AddToPriorityQueue(ctx, evt.Object, false)
++}
++
+ // ApplyWorkReconciler reconciles a Work object
+ type ApplyWorkReconciler struct {
+ 	client             client.Client
+@@ -210,6 +312,9 @@ func (r *ApplyWorkReconciler) Reconcile(ctx context.Context, req ctrl.Request) (
+ 	// * user cannot update/delete the webhook.
+ 	defaulter.SetDefaultsWork(work)
+ 
++	age := time.Since(work.CreationTimestamp.Time)
++	klog.V(4).InfoS("reconciling Work", "work", req.NamespacedName, "age", age)
++
+ 	// ensure that the appliedWork and the finalizer exist
+ 	appliedWork, err := r.ensureAppliedWork(ctx, work)
+ 	if err != nil {
+@@ -682,6 +787,15 @@ func (r *ApplyWorkReconciler) Leave(ctx context.Context) error {
+ 
+ // SetupWithManager wires up the controller.
+ func (r *ApplyWorkReconciler) SetupWithManager(mgr ctrl.Manager) error {
++	// Create the priority queue using the rate limiter and a queue name
++	queue := priorityqueue.New[priorityQueueItem]("apply-work-queue")
++
++	// Create the event handler that uses the priority queue
++	eventHandler := &PriorityQueueEventHandler{
++		Queue:  queue, // Attach the priority queue to the event handler
++		Client: r.client,
++	}
++
+ 	r.appliers = map[fleetv1beta1.ApplyStrategyType]Applier{
+ 		fleetv1beta1.ApplyStrategyTypeServerSideApply: &ServerSideApplier{
+ 			HubClient:          r.client,
+@@ -698,7 +812,8 @@ func (r *ApplyWorkReconciler) SetupWithManager(mgr ctrl.Manager) error {
+ 		WithOptions(ctrloption.Options{
+ 			MaxConcurrentReconciles: r.concurrency,
+ 		}).
+-		For(&fleetv1beta1.Work{}, builder.WithPredicates(predicate.GenerationChangedPredicate{})).
++		For(&fleetv1beta1.Work{}).
++		Watches(&fleetv1beta1.Work{}, eventHandler).
+ 		Complete(r)
+ }
+ 
+diff --git a/test/apis/v1alpha1/zz_generated.deepcopy.go b/test/apis/v1alpha1/zz_generated.deepcopy.go
+index 081bec9..143bdee 100644
+--- a/test/apis/v1alpha1/zz_generated.deepcopy.go
++++ b/test/apis/v1alpha1/zz_generated.deepcopy.go
+@@ -21,7 +21,7 @@ limitations under the License.
+ package v1alpha1
+ 
+ import (
+-	"k8s.io/apimachinery/pkg/apis/meta/v1"
++	v1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+ 	runtime "k8s.io/apimachinery/pkg/runtime"
+ )
+ 
